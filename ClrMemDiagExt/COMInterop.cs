@@ -3054,6 +3054,8 @@ namespace NetExt.Shim
             if (this.m_info.DacInfo.PlatformAgnosticFileName.Contains("mscordaccore"))
             {
                 Module coreCLR = new Module("coreclr");
+                if (!coreCLR.IsValid)
+                    coreCLR = new Module("libcoreclr");  // Linux fallback
                 if (coreCLR.IsValid)
                 {
                     pVersion = String.Format(".NETCore {0}", coreCLR.Version.Replace(',', '.'));
@@ -3202,14 +3204,25 @@ namespace NetExt.Shim
                     {
                         DebugApi.WriteLine("Reverted to Runtime {0}: {1}", runTimeIndex, m_target.ClrVersions[runTimeIndex].DacInfo.PlatformAgnosticFileName);
                     }
-                    
-                    
+
+
                 }
                 return hr;
             }
             else
             {
-                return HRESULTS.E_FAIL;
+                // Linux dump path: re-create runtime using auto-detection (no IXCLRData available)
+                try
+                {
+                    DebugApi.Runtime = m_target.ClrVersions[runTimeIndex].CreateRuntime();
+                    ppRuntime = new MDRuntime(DebugApi.Runtime);
+                    return HRESULTS.S_OK;
+                }
+                catch
+                {
+                    runTimeIndex = oldIndex;
+                    return HRESULTS.E_FAIL;
+                }
             }
 
 
@@ -3223,7 +3236,7 @@ namespace NetExt.Shim
             if (m_target == null || m_target.ClrVersions == null)
                 return HRESULTS.E_FAIL;
 
-            if (m_target.ClrVersions.Count == 1)
+            if (ixCLRProcess != null && m_target.ClrVersions.Count == 1)
             {
                 try
                 {
@@ -3290,8 +3303,27 @@ namespace NetExt.Shim
                   }
                } catch(Exception ex)
                {
-
                   DebugApi.WriteLine("Error initializing Runtime {0}: {1}", i, m_target.ClrVersions[i].DacInfo.PlatformAgnosticFileName);
+
+                  // Fallback: scan local .NET installations for matching DAC
+                  string dacFromInstall = FindDacFromDotnetInstallation(m_target.ClrVersions[i]);
+                  if (dacFromInstall != null)
+                  {
+                      try
+                      {
+                          var fallbackRuntime = m_target.ClrVersions[i].CreateRuntime(dacFromInstall, true);
+                          Runtimes.Add(fallbackRuntime);
+                          int threads = fallbackRuntime.Threads.Count;
+                          if (max < threads)
+                          {
+                              index = Runtimes.Count - 1;
+                              max = threads;
+                          }
+                          continue;
+                      }
+                      catch { }
+                  }
+
                   DebugApi.WriteLine("If there is more than one Runtime this can be ignored");
                   DebugApi.WriteLine("Error: {0}", ex.Message);
 
@@ -3308,6 +3340,34 @@ namespace NetExt.Shim
             DebugApi.Runtime.Flush();
             
             return HRESULTS.S_OK;
+        }
+
+        private static string FindDacFromDotnetInstallation(ClrInfo clrInfo)
+        {
+            string[] basePaths = new string[]
+            {
+                @"C:\Program Files\dotnet\shared\Microsoft.NETCore.App",
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                    @"dotnet\shared\Microsoft.NETCore.App")
+            };
+
+            // Deduplicate paths
+            var searchPaths = basePaths.Distinct(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var basePath in searchPaths)
+            {
+                if (!Directory.Exists(basePath)) continue;
+                foreach (var dir in Directory.GetDirectories(basePath).OrderByDescending(d => d))
+                {
+                    string dacFilePath = Path.Combine(dir, "mscordaccore.dll");
+                    if (File.Exists(dacFilePath))
+                    {
+                        DebugApi.WriteLine("Found DAC from .NET installation: {0}", dacFilePath);
+                        return dacFilePath;
+                    }
+                }
+            }
+            return null;
         }
 
         internal const string DownloadUrl = "https://github.com/rodneyviana/netext/tree/master/Binaries/";

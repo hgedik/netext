@@ -1092,7 +1092,7 @@ namespace Microsoft.Diagnostics.Runtime
             {
                 string clrName = Path.GetFileNameWithoutExtension(module.FileName).ToLower();
 
-                if (clrName != "clr" && clrName != "mscorwks" && clrName != "coreclr" && clrName != "mrt100_app")
+                if (clrName != "clr" && clrName != "mscorwks" && clrName != "coreclr" && clrName != "libcoreclr" && clrName != "mrt100_app")
                     continue;
 
                 ClrFlavor flavor;
@@ -1102,6 +1102,7 @@ namespace Microsoft.Diagnostics.Runtime
                         flavor = ClrFlavor.Native;
                         break;
 
+                    case "libcoreclr":
                     case "coreclr":
                         flavor = ClrFlavor.Core;
                         break;

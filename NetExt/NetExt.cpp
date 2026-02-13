@@ -29,6 +29,10 @@ bool NET2 = false;
 
 bool coreCLR = false;
 
+bool linuxDump = false;
+
+std::wstring dacPath;
+
 #define MIDL_DEFINE_GUID(type,name,l,w1,w2,b1,b2,b3,b4,b5,b6,b7,b8) \
         const type name = {l,w1,w2,{b1,b2,b3,b4,b5,b6,b7,b8}}
 MIDL_DEFINE_GUID(IID, IID_ClrMDExt,0x5c552ab6,0xfc09,0x4cb3,0x8e,0x36,0x22,0xfa,0x03,0xc7,0x98,0xb7);
@@ -393,27 +397,43 @@ HRESULT INIT_API()
 	else
 	{
 		string clr = EXT_CLASS::Execute("lmv mclr");
-		NET2 = clr.find("Microsoft") == string::npos; 
+		NET2 = clr.find("Microsoft") == string::npos;
 		clr = EXT_CLASS::Execute("lmv mcoreclr");
 		if(clr.find("Microsoft") != string::npos)
 		{
 			coreCLR = true;
 			NET2 = false;
 		}
+
+		// Check for Linux CoreCLR module (libcoreclr.so)
+		if(!coreCLR)
+		{
+			clr = EXT_CLASS::Execute("lmv mlibcoreclr");
+			if(clr.find("libcoreclr") != string::npos)
+			{
+				coreCLR = true;
+				linuxDump = true;
+				NET2 = false;
+			}
+		}
+
 		HRESULT hr = S_OK;
-		
+
 		if(pTarget != NULL) hr = E_APPLICATION_ACTIVATION_EXEC_FAILURE;
 		EXITPOINTEXT("Init was performed but it could not start CLR\nTry running .cordll -l");
 
-		if(!clrData)
+		if(!clrData && !linuxDump)
 		{
 			clrInterface.Iid=&IID_ClrMDExt;
 			Ioctl(IG_GET_CLR_DATA_INTERFACE,&clrInterface,sizeof(clrInterface));
 			clrData=(IUnknown*)clrInterface.Iface; // We do not own the pointer
 		}
 
-		if(!clrData) hr=E_APPLICATION_ACTIVATION_EXEC_FAILURE;
-		EXITPOINTEXT("Unable to acquire .NET debugger interface\nTry running .cordll -l");
+		if(!clrData && !linuxDump)
+		{
+			hr=E_APPLICATION_ACTIVATION_EXEC_FAILURE;
+			EXITPOINTEXT("Unable to acquire .NET debugger interface\nTry running .cordll -l");
+		}
 
 		using namespace NetExtShim;
 		::CoInitialize(NULL);
@@ -421,9 +441,37 @@ HRESULT INIT_API()
 		CallCSDll::GetInterface();
 		if(pTarget)
 		{
-			hr=pTarget->CreateRuntimeFromIXCLR(clrData, &pRuntime);
-			
-			EXITPOINTEXT("Unable to create runtime\nTry running .cordll -l");
+			if(linuxDump)
+			{
+				if(!dacPath.empty())
+				{
+					// Manual DAC path via !wsetdac
+					_bstr_t bstrDac(dacPath.c_str());
+					hr = pTarget->CreateRuntimeFromDac(bstrDac, &pRuntime);
+				}
+				else
+				{
+					// Auto-detect: pass NULL to trigger ClrMD SymbolLocator + dotnet scanning
+					hr = pTarget->CreateRuntimeFromIXCLR(NULL, &pRuntime);
+				}
+
+				if(hr != S_OK || pRuntime == NULL)
+				{
+					g_ExtInstancePtr->Out(
+						"Linux dump detected. Could not auto-detect DAC.\n"
+						"Use !wsetdac <path> to specify manually.\n"
+						"Example: !wsetdac C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\6.0.0\\mscordaccore.dll\n");
+					hr = E_APPLICATION_ACTIVATION_EXEC_FAILURE;
+					return hr;
+				}
+			}
+			else
+			{
+				// Windows dump path (existing behavior)
+				hr=pTarget->CreateRuntimeFromIXCLR(clrData, &pRuntime);
+				EXITPOINTEXT("Unable to create runtime\nTry running .cordll -l");
+			}
+
 			if(pRuntime == NULL) hr=E_APPLICATION_ACTIVATION_EXEC_FAILURE;
 			EXITPOINTEXT("Runtime returned NULL");
 			isCLRInit = true;
@@ -891,7 +939,7 @@ EXT_COMMAND(wsetruntime,
 			)
 {
 	int i = GetUnnamedArgU64(0);
-    INIT_API();   
+    INIT_API();
 	NetExtShim::IMDRuntime *runTime = NULL;
 
 	HRESULT hr = pTarget->SetCurrentRuntime(i, &runTime);
@@ -909,4 +957,31 @@ EXT_COMMAND(wsetruntime,
 		Out("Unable to change Runtime\n");
 	}
 
+}
+
+EXT_COMMAND(wsetdac,
+			"Sets the DAC file path for Linux dump analysis. Use '!whelp wsetdac' for detailed help",
+			"{;x,o;;Full path to the DAC DLL (mscordaccore.dll)}"
+			)
+{
+	PCSTR arg = GetUnnamedArgStr(0);
+	if(arg == NULL || strlen(arg) == 0)
+	{
+		if(!dacPath.empty())
+			Out("Current DAC path: %S\n", dacPath.c_str());
+		else
+			Out("No DAC path set.\nUsage: !wsetdac <path-to-mscordaccore.dll>\n"
+				"Example: !wsetdac C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\6.0.0\\mscordaccore.dll\n");
+		return;
+	}
+
+	string path(arg);
+	dacPath = std::wstring(path.begin(), path.end());
+
+	// Reset init state so next command re-initializes with new DAC
+	isCLRInit = false;
+	pRuntime = NULL;
+	pHeap = NULL;
+
+	Out("DAC path set: %s\nRun any NetExt command (e.g. !windex) to initialize with this DAC.\n", path.c_str());
 }

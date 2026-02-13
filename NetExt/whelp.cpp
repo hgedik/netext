@@ -48,6 +48,7 @@ EXT_COMMAND(whelp,
 		Dml("!<link cmd=\"!whelp wt\">wt</link> - Step into managed code (like F11 in Visual Studio)\n");
 		Dml("!<link cmd=\"!whelp wvar\">wvar</link> - Display process environment variables\n");
 		Dml("<b>*(new)*</b> !<link cmd=\"!whelp wsetruntime\">wsetruntime</link> - Select a runtime when more than 1 is in the process\n");
+		Dml("<b>*(new)*</b> !<link cmd=\"!whelp wsetdac\">wsetdac</link> - Set DAC file path for Linux .NET Core dump analysis\n");
 		Dml("\n");
 		Dml("<b>Special</b>\n");
 		Dml("<b>-------</b>\n");
@@ -104,6 +105,37 @@ EXT_COMMAND(whelp,
 		Dml("0: Filename: mscordaccore_X86_X86_4.700.20.41105.dll \n");
 		Dml(".NETCore Version: 4.8.4261.0\n");
 		Dml("\n");
+		Dml("\n");
+	return;
+	}
+	if(keyword=="wsetdac")
+	{
+		Dml("Set DAC file path for analyzing Linux .NET Core dumps in WinDbg Preview.\n");
+		Dml("\n");
+		Dml("<b>Syntax:</b>\n");
+		Dml("----------\n");
+		Dml("!wsetdac [&lt;path&gt;]\n");
+		Dml("\n");
+		Dml("<b>Where:</b>\n");
+		Dml("----------\n");
+		Dml("&lt;path&gt; is the full path to the DAC DLL (mscordaccore.dll). Optional.\n");
+		Dml("When called without arguments, displays the current DAC path.\n");
+		Dml("\n");
+		Dml("<b>Linux Dump Support:</b>\n");
+		Dml("----------\n");
+		Dml("NetExt auto-detects the DAC from local .NET installations when analyzing Linux dumps.\n");
+		Dml("If auto-detection fails, use !wsetdac to specify the DAC path manually.\n");
+		Dml("The DAC file (mscordaccore.dll) is located in the .NET runtime directory:\n");
+		Dml("  C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\&lt;version&gt;\\\n");
+		Dml("\n");
+		Dml("<b>Example:</b>\n");
+		Dml("----------\n");
+		Dml("0:000&gt; !wsetdac C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\6.0.0\\mscordaccore.dll\n");
+		Dml("DAC path set: C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\6.0.0\\mscordaccore.dll\n");
+		Dml("Run any NetExt command (e.g. !windex) to initialize with this DAC.\n");
+		Dml("\n");
+		Dml("0:000&gt; !windex\n");
+		Dml("...(output)...\n");
 		Dml("\n");
 	return;
 	}

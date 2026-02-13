@@ -232,6 +232,8 @@ long IsManagedInterrupt();
 
 extern bool NET2;
 extern bool coreCLR;
+extern bool linuxDump;
+extern std::wstring dacPath;
 HRESULT INIT_API();
 
 
@@ -668,6 +670,7 @@ public:
 	EXT_COMMAND_METHOD(wp);
 	EXT_COMMAND_METHOD(wt);
 	EXT_COMMAND_METHOD(wsetruntime);
+	EXT_COMMAND_METHOD(wsetdac);
 
 	regex_constants::syntax_option_type GetFlavor(const string& flavor);
 	std::ostringstream regexmatch(const string& Target, const string& Pattern, bool CaseSensitive, const string& Flavor, bool Run, const string& Format);
