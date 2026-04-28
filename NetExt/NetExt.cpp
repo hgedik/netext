@@ -405,10 +405,17 @@ HRESULT INIT_API()
 			NET2 = false;
 		}
 
-		// Check for Linux CoreCLR module (libcoreclr.so)
+		// Check for Linux CoreCLR module. WinDbg renames ELF shared libs replacing
+		// '.' with '_', so the module is typically listed as 'libcoreclr_so'. We try
+		// the common variants used across WinDbg/dbgeng versions.
 		if(!coreCLR)
 		{
-			clr = EXT_CLASS::Execute("lmv mlibcoreclr");
+			clr = EXT_CLASS::Execute("lmv mlibcoreclr_so");
+			if(clr.find("libcoreclr") == string::npos)
+				clr = EXT_CLASS::Execute("lmv mlibcoreclr");
+			if(clr.find("libcoreclr") == string::npos)
+				clr = EXT_CLASS::Execute("lmv m*libcoreclr*");
+
 			if(clr.find("libcoreclr") != string::npos)
 			{
 				coreCLR = true;
@@ -422,13 +429,18 @@ HRESULT INIT_API()
 		if(pTarget != NULL) hr = E_APPLICATION_ACTIVATION_EXEC_FAILURE;
 		EXITPOINTEXT("Init was performed but it could not start CLR\nTry running .cordll -l");
 
-		if(!clrData && !linuxDump)
+		// Always try to acquire the IXCLRDataProcess interface. For Linux dumps
+		// opened in WinDbg Preview, SOS provides a cross-DAC IXCLRData and dbgeng
+		// exposes it via IG_GET_CLR_DATA_INTERFACE just like a Windows dump.
+		if(!clrData)
 		{
 			clrInterface.Iid=&IID_ClrMDExt;
 			Ioctl(IG_GET_CLR_DATA_INTERFACE,&clrInterface,sizeof(clrInterface));
 			clrData=(IUnknown*)clrInterface.Iface; // We do not own the pointer
 		}
 
+		// Only fail hard on missing IXCLRData when we have no fallback path.
+		// For Linux dumps a manual DAC (!wsetdac) is the fallback.
 		if(!clrData && !linuxDump)
 		{
 			hr=E_APPLICATION_ACTIVATION_EXEC_FAILURE;
@@ -441,34 +453,47 @@ HRESULT INIT_API()
 		CallCSDll::GetInterface();
 		if(pTarget)
 		{
-			if(linuxDump)
+			// Preferred path for both Windows and Linux dumps: hand SOS's
+			// IXCLRDataProcess to ClrMD. This works for Linux dumps because
+			// WinDbg Preview loads a cross-OS DAC for SOS automatically.
+			if(clrData)
+			{
+				hr = pTarget->CreateRuntimeFromIXCLR(clrData, &pRuntime);
+			}
+			else
+			{
+				hr = E_FAIL;
+			}
+
+			// Linux fallback: when SOS hasn't loaded yet, or IXCLRData isn't
+			// available, try a manual or auto-detected DAC.
+			if(linuxDump && (hr != S_OK || pRuntime == NULL))
 			{
 				if(!dacPath.empty())
 				{
-					// Manual DAC path via !wsetdac
 					_bstr_t bstrDac(dacPath.c_str());
 					hr = pTarget->CreateRuntimeFromDac(bstrDac, &pRuntime);
 				}
 				else
 				{
-					// Auto-detect: pass NULL to trigger ClrMD SymbolLocator + dotnet scanning
+					// Pass NULL to let the C# shim try its own DAC discovery
+					// (SymbolLocator / local dotnet installations).
 					hr = pTarget->CreateRuntimeFromIXCLR(NULL, &pRuntime);
 				}
 
 				if(hr != S_OK || pRuntime == NULL)
 				{
 					g_ExtInstancePtr->Out(
-						"Linux dump detected. Could not auto-detect DAC.\n"
-						"Use !wsetdac <path> to specify manually.\n"
-						"Example: !wsetdac C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\6.0.0\\mscordaccore.dll\n");
+						"Linux dump detected but the runtime could not be initialized.\n"
+						"Make sure SOS is loaded (.loadby sos coreclr) so WinDbg can\n"
+						"download a matching cross-DAC, or specify the DAC manually:\n"
+						"  !wsetdac <path-to-mscordaccore.dll>\n");
 					hr = E_APPLICATION_ACTIVATION_EXEC_FAILURE;
 					return hr;
 				}
 			}
 			else
 			{
-				// Windows dump path (existing behavior)
-				hr=pTarget->CreateRuntimeFromIXCLR(clrData, &pRuntime);
 				EXITPOINTEXT("Unable to create runtime\nTry running .cordll -l");
 			}
 
@@ -975,8 +1000,21 @@ EXT_COMMAND(wsetdac,
 		return;
 	}
 
-	string path(arg);
-	dacPath = std::wstring(path.begin(), path.end());
+	// Strip surrounding quotes if the user typed them.
+	std::string path(arg);
+	if(path.size() >= 2 && path.front() == '"' && path.back() == '"')
+		path = path.substr(1, path.size() - 2);
+
+	// MBCS -> UTF-16 conversion so non-ASCII paths survive.
+	int wlen = MultiByteToWideChar(CP_ACP, 0, path.c_str(), -1, NULL, 0);
+	if(wlen <= 0)
+	{
+		Out("Invalid DAC path encoding.\n");
+		return;
+	}
+	std::wstring wpath(static_cast<size_t>(wlen - 1), L'\0');
+	MultiByteToWideChar(CP_ACP, 0, path.c_str(), -1, &wpath[0], wlen);
+	dacPath = wpath;
 
 	// Reset init state so next command re-initializes with new DAC
 	isCLRInit = false;

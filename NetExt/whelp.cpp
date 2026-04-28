@@ -123,9 +123,15 @@ EXT_COMMAND(whelp,
 		Dml("\n");
 		Dml("<b>Linux Dump Support:</b>\n");
 		Dml("----------\n");
-		Dml("NetExt auto-detects the DAC from local .NET installations when analyzing Linux dumps.\n");
-		Dml("If auto-detection fails, use !wsetdac to specify the DAC path manually.\n");
-		Dml("The DAC file (mscordaccore.dll) is located in the .NET runtime directory:\n");
+		Dml("Open the Linux core dump in WinDbg Preview, then load SOS:\n");
+		Dml("  .loadby sos coreclr\n");
+		Dml("WinDbg Preview will automatically download a cross-DAC matching the\n");
+		Dml("dump's runtime version. NetExt picks up that DAC through SOS and\n");
+		Dml("normally needs no further configuration.\n");
+		Dml("\n");
+		Dml("Use !wsetdac only when SOS cannot load the DAC automatically (e.g. no\n");
+		Dml("internet access or the runtime version is missing locally). The DAC\n");
+		Dml("file lives in the .NET install directory:\n");
 		Dml("  C:\\Program Files\\dotnet\\shared\\Microsoft.NETCore.App\\&lt;version&gt;\\\n");
 		Dml("\n");
 		Dml("<b>Example:</b>\n");

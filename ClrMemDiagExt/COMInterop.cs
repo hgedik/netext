@@ -3344,26 +3344,73 @@ namespace NetExt.Shim
 
         private static string FindDacFromDotnetInstallation(ClrInfo clrInfo)
         {
-            string[] basePaths = new string[]
+            // Search common .NET install locations for a DAC file. WinDbg Preview
+            // can analyze Linux .NET Core dumps using a Windows-hosted cross-DAC,
+            // so 'mscordaccore.dll' is the right file even for libcoreclr targets.
+            var basePaths = new List<string>
             {
                 @"C:\Program Files\dotnet\shared\Microsoft.NETCore.App",
+                @"C:\Program Files (x86)\dotnet\shared\Microsoft.NETCore.App",
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                    @"dotnet\shared\Microsoft.NETCore.App")
+                    @"dotnet\shared\Microsoft.NETCore.App"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                    @"dotnet\shared\Microsoft.NETCore.App"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    @".dotnet\shared\Microsoft.NETCore.App")
             };
 
-            // Deduplicate paths
-            var searchPaths = basePaths.Distinct(StringComparer.OrdinalIgnoreCase);
+            string dotnetRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");
+            if (!string.IsNullOrEmpty(dotnetRoot))
+                basePaths.Add(Path.Combine(dotnetRoot, "shared", "Microsoft.NETCore.App"));
 
-            foreach (var basePath in searchPaths)
+            // DAC filename candidates. WinDbg Preview uses Windows-hosted cross-DAC
+            // even for Linux dumps, but we also probe Linux native names for
+            // completeness.
+            string[] dacNames = new[]
             {
+                "mscordaccore.dll",
+                "mscordaccore_amd64_amd64.dll",
+                "libmscordaccore.so",
+                "mscordaccore.so"
+            };
+
+            string targetVersion = null;
+            try
+            {
+                if (clrInfo != null && clrInfo.Version != null)
+                    targetVersion = clrInfo.Version.ToString();
+            }
+            catch { }
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var basePath in basePaths)
+            {
+                if (string.IsNullOrEmpty(basePath) || !seen.Add(basePath)) continue;
                 if (!Directory.Exists(basePath)) continue;
-                foreach (var dir in Directory.GetDirectories(basePath).OrderByDescending(d => d))
+
+                IEnumerable<string> dirs = Directory.GetDirectories(basePath)
+                                                    .OrderByDescending(d => d);
+
+                // Prefer an exact version-folder match if we know the runtime version.
+                if (!string.IsNullOrEmpty(targetVersion))
                 {
-                    string dacFilePath = Path.Combine(dir, "mscordaccore.dll");
-                    if (File.Exists(dacFilePath))
+                    var exact = dirs.FirstOrDefault(d =>
+                        string.Equals(Path.GetFileName(d), targetVersion,
+                                      StringComparison.OrdinalIgnoreCase));
+                    if (exact != null)
+                        dirs = new[] { exact }.Concat(dirs.Where(d => d != exact));
+                }
+
+                foreach (var dir in dirs)
+                {
+                    foreach (var dacName in dacNames)
                     {
-                        DebugApi.WriteLine("Found DAC from .NET installation: {0}", dacFilePath);
-                        return dacFilePath;
+                        string dacFilePath = Path.Combine(dir, dacName);
+                        if (File.Exists(dacFilePath))
+                        {
+                            DebugApi.WriteLine("Found DAC from .NET installation: {0}", dacFilePath);
+                            return dacFilePath;
+                        }
                     }
                 }
             }
